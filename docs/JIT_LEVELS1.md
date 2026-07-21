@@ -24,13 +24,20 @@ Tile columns in Detected Levels / `gamestages` match runtime RAM:
 | `tile_x` / `tile_y` | Tile units 0–31 | `$1F1F` / `$1F21` |
 | (pixels) | tile × 16 | `$1F17` / `$1F19` — **not** stored; 3lvno derives them |
 
-**LM hacks (3000+):** detect hijack in pure JS (`read1($04D807)==$A9`, pointer from `$04D803`/`$04D808`), decompress LevelNumberMap (`lcLz2Decompress`), parse all 7 submaps. **Never** fall back to the vanilla sequential tilemap scan when the hijack is present (that produces wrong X/Y and a `tile_value`). If decode fails → warning + blank coords (`trans_source: unavailable`).
+**LM hacks (3000+):** detect LevelNumberMap pointer in pure JS (no asar):
+
+1. **Modern** — `read1($04D807)==$A9`, pointer `(read1($04D808)<<16)|read2($04D803)` (OverworldTables.asm / QuickieWorld).
+2. **Bank-before-LDX** — `LDA #bank / STA $8C / LDX #imm / STX $8A` at `$04D802+` (Invictus).
+3. **XOR trampoline** — if `$00B8DE` is `JSL` to `LDA $8A / EOR #imm16 / STA $8A`, XOR the pointer low word (Invictus `$158E` → `$DDB538`).
+4. Decompress with **LC_LZ2 then LC_LZ3** (`lc-lz2.js` / `lc-lz3.js`); parse all 7 submaps.
+
+**Never** fall back to the vanilla sequential tilemap scan when an LM hijack or OW decompress stub (`JML $00B8DE`) is present (that produces wrong X/Y and a `tile_value`). If decode fails → warning + blank coords (`trans_source: unavailable`). Merged Detected Levels **prefer** `trans_source: levelnumbermap` coords over stale DB/tilemap rows.
 
 **True vanilla ROMs** (hijack absent): scan Layer1 at `$0CF7DF` for gfx tiles `$56–$80` (`trans_source: tilemap`, sets `tile_value`).
 
 Primary tile when a translevel appears multiple times: minimum `(submap, tile_y, tile_x)`. Each level exports `trans_source` (`levelnumbermap` \| `tilemap` \| `unavailable`).
 
-Optional local check: `JIT_TRANS_FIXTURE_ROM=/path/to/any.sfc ./enode.sh tests/test_jit_trans.js`
+Fixtures: QuickieWorld (modern), Invictus (bank-before + XOR). Optional: `JIT_TRANS_FIXTURE_ROM=/path/to/any.sfc ./enode.sh tests/test_jit_trans.js`
 
 | `jitlmfilter` | `jit-lmfilter.js` | Level IDs from `gameversions.lmlevels`, catalog `lmfilter`, or Calisto/LM363 export |
 | `jitlevelinfo` | `levelinfo/` | Full `level_info1` parse — headers, objects, sprites, gfx route |

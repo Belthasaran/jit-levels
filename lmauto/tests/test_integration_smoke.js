@@ -1,5 +1,5 @@
 /**
- * Opt-in Wine+LM smoke: requires LMAUTO_INTEGRATION=1, wine, DISPLAY, LM, node-win-x64,
+ * Opt-in Wine+LM smoke: requires LMAUTO_INTEGRATION=1, wine, DISPLAY, LM, node-win-x86,
  * and LMAUTO_SMOKE_ROM (path to a hack ROM with at least one modified level).
  *
  * Example:

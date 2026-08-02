@@ -8,7 +8,7 @@
 # Env:
 #   LMAUTO_LM            Lunar Magic exe (default: ../lm363.exe beside this tree)
 #   LMAUTO_WINEPREFIX    Wine prefix (default: $HOME/.wine_lm_auto)
-#   LMAUTO_NODE          Windows node.exe (default: ../node-win-x64/node.exe)
+#   LMAUTO_NODE          Windows node.exe (default: ../node-win-x86/node.exe — PE32 required)
 #   WINE                 wine binary (default: wine)
 #   DISPLAY              X display (default: :99)
 #   LMAUTO_KEEP_WORKDIR  if 1, do not delete workdir on exit
@@ -23,9 +23,16 @@ export WINEDEBUG="${WINEDEBUG:--all}"
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
 
 LM_DEFAULT="${LMAUTO_ROOT}/lm363.exe"
-NODE_DEFAULT="${LMAUTO_ROOT}/node-win-x64/node.exe"
+NODE_X86_DEFAULT="${LMAUTO_ROOT}/node-win-x86/node.exe"
+NODE_X64_DEFAULT="${LMAUTO_ROOT}/node-win-x64/node.exe"
 LM="${LMAUTO_LM:-$LM_DEFAULT}"
-NODE_WIN="${LMAUTO_NODE:-$NODE_DEFAULT}"
+if [[ -n "${LMAUTO_NODE:-}" ]]; then
+  NODE_WIN="${LMAUTO_NODE}"
+elif [[ -f "$NODE_X86_DEFAULT" ]]; then
+  NODE_WIN="$NODE_X86_DEFAULT"
+else
+  NODE_WIN="$NODE_X64_DEFAULT"
+fi
 
 ROM=""
 PROFILE=""
@@ -57,7 +64,10 @@ Options:
   --timeout-ms=<n>       Overall timeout (default 600000)
   --poll-ms=<n>          Poll interval (default 250)
 
-Environment: LMAUTO_LM, LMAUTO_WINEPREFIX, LMAUTO_NODE, WINE, DISPLAY
+Environment: LMAUTO_LM, LMAUTO_WINEPREFIX, LMAUTO_NODE (prefer node-win-x86), WINE, DISPLAY
+
+Note: Guest Node must be PE32 (ia32). Menu checkmarks are read by injecting
+native/lmauto_menuread.dll into LM — cross-process GetMenu fails under Wine.
 EOF
 }
 
@@ -101,7 +111,7 @@ if [[ ! -f "$LM" ]]; then
 fi
 if [[ ! -f "$NODE_WIN" ]]; then
   echo "error: Windows node.exe not found: $NODE_WIN" >&2
-  echo "  Expected lmauto/node-win-x64/node.exe (or set LMAUTO_NODE)" >&2
+  echo "  Expected lmauto/node-win-x86/node.exe (PE32; or set LMAUTO_NODE)" >&2
   exit 1
 fi
 if ! command -v "$WINE_BIN" >/dev/null 2>&1; then
@@ -109,16 +119,35 @@ if ! command -v "$WINE_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
+MENUREAD_DLL="${LMAUTO_ROOT}/native/lmauto_menuread.dll"
+if [[ ! -f "$MENUREAD_DLL" ]]; then
+  echo "lmauto: building native/lmauto_menuread.dll..."
+  bash "${LMAUTO_ROOT}/native/build_menuread.sh"
+fi
+if [[ ! -f "$MENUREAD_DLL" ]]; then
+  echo "error: missing $MENUREAD_DLL (in-process menu reader)" >&2
+  exit 1
+fi
+
+# Refuse PE32+ guest — CreateRemoteThread into PE32 LM needs ia32 Node.
+NODE_FILE_INFO=$(file -b "$NODE_WIN" 2>/dev/null || true)
+if echo "$NODE_FILE_INFO" | grep -q 'PE32+'; then
+  echo "error: LMAUTO_NODE is PE32+ (x64): $NODE_WIN" >&2
+  echo "  Menu reads require PE32 Node (node-win-x86). Node 20 win-x86 zip works." >&2
+  exit 1
+fi
+echo "lmauto: guest Node ${NODE_WIN}"
+
 # Ensure koffi is installed for the guest (npm under Wine node).
 if [[ ! -d "${LMAUTO_ROOT}/node_modules/koffi" ]]; then
-  echo "lmauto: installing npm deps (koffi) via Wine node..."
+  echo "lmauto: installing npm deps (koffi) via host npm..."
   (
     cd "${LMAUTO_ROOT}"
-    # Prefer host npm if present for fetching; koffi ships prebuilds for win32.
     if command -v npm >/dev/null 2>&1; then
       npm install --no-fund --no-audit
     else
-      "${WINE_BIN}" "${NODE_WIN}" "${LMAUTO_ROOT}/node-win-x64/node_modules/npm/bin/npm-cli.js" install --no-fund --no-audit
+      echo "error: npm not found; run npm install in ${LMAUTO_ROOT}" >&2
+      exit 1
     fi
   )
 fi
@@ -165,8 +194,8 @@ echo "lmauto: starting LM ${WORKDIR}/lm.exe rom.sfc"
 ) &
 LM_PID=$!
 
-# Give LM time to create LMFrame before automator attaches.
-sleep 3
+# Brief pause for LMFrame (menu reads are in-process; no long menu poll).
+sleep 1.5
 
 # Map Linux paths to Wine Z: paths for the guest script.
 to_wine_path() {
@@ -193,10 +222,22 @@ if [[ "$AUTO_SET_SCREENS" -eq 1 ]]; then
 fi
 
 echo "lmauto: running guest automator..."
+# PE32 Node under Wine breaks on piped stdio (EBADF); log to a file instead.
+GUEST_LOG="${WORKDIR}/guest.log"
+set +e
 (
   cd "${WORKDIR}"
-  "${WINE_BIN}" "${NODE_WIN}" "${GUEST_ARGS[@]}"
+  "${WINE_BIN}" "${NODE_WIN}" "${GUEST_ARGS[@]}" >"${GUEST_LOG}" 2>&1
 )
+GUEST_RC=$?
+set -e
+if [[ -f "${GUEST_LOG}" ]]; then
+  cat "${GUEST_LOG}"
+fi
+if [[ "$GUEST_RC" -ne 0 ]]; then
+  echo "error: guest automator exited ${GUEST_RC}" >&2
+  exit "$GUEST_RC"
+fi
 
 # Copy PNGs to destination.
 shopt -s nullglob

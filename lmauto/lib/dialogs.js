@@ -22,7 +22,6 @@ function setDlgCheckbox(hwndDlg, ctrlId, wantChecked) {
   const want = wantChecked ? WIN.BST_CHECKED : WIN.BST_UNCHECKED;
   if (cur !== want) {
     win32.setCheck(ctrl, wantChecked);
-    // Some Wine builds ignore BM_SETCHECK without a click — toggle via BM_CLICK if still wrong.
     if (win32.getCheck(ctrl) !== want) {
       win32.clickButton(ctrl);
       if (win32.getCheck(ctrl) !== want) {
@@ -33,11 +32,31 @@ function setDlgCheckbox(hwndDlg, ctrlId, wantChecked) {
 }
 
 /**
+ * Click Dialog 1027 "Select Directory && File Name" via parent WM_COMMAND.
+ */
+async function clickSelectDirFile(dlg) {
+  const selectBtn = win32.getDlgItem(dlg, DLG_EXPORT_IMAGES.SELECT_DIR_FILE);
+  if (!selectBtn) throw new Error('Dialog 1027: Select Directory && File Name button missing');
+
+  console.log('lmauto: clicking Select Directory && File Name (WM_COMMAND BN_CLICKED)');
+  win32.clickDialogButton(dlg, DLG_EXPORT_IMAGES.SELECT_DIR_FILE, selectBtn);
+
+  // If save dialog does not appear, retry with PostMessage + BM_CLICK.
+  await win32.sleep(400);
+  if (!win32.findCommonFileDialog()) {
+    console.log('lmauto: save dialog not yet visible; PostMessage + BM_CLICK fallback');
+    win32.postMessage(dlg, WIN.WM_COMMAND, DLG_EXPORT_IMAGES.SELECT_DIR_FILE, 0);
+    win32.clickButton(selectBtn);
+    await win32.sleep(400);
+  }
+}
+
+/**
  * Open Export Multiple Levels to Images and complete the save dialog.
  *
  * @param {any} lmHwnd LMFrame
  * @param {object} opts
- * @param {string} opts.savePath  Full path (Windows) for filename prefix, e.g. Z:\...\out\lmlevel_l1only_nogrid
+ * @param {string} opts.savePath  Full path (Windows) for filename prefix
  * @param {boolean} [opts.onlyModified=true]
  * @param {boolean} [opts.autoSetScreens=false]
  * @param {number} [opts.timeoutMs]
@@ -49,33 +68,34 @@ async function runExportMultipleImages(lmHwnd, opts) {
   const onlyModified = opts.onlyModified !== false;
   const autoSetScreens = !!opts.autoSetScreens;
   let savePath = opts.savePath;
-  // LM appends level number after the prefix; strip trailing .png if caller passed one.
   if (/\.(png|bmp)$/i.test(savePath)) {
     savePath = savePath.replace(/\.(png|bmp)$/i, '');
   }
 
   win32.setForeground(lmHwnd);
-  win32.sendCommand(lmHwnd, WM.EXPORT_MULTIPLE_LEVELS_IMAGES);
+  // PostMessage: SendMessage(9148) blocks inside LM's modal dialog forever.
+  console.log('lmauto: posting Export Multiple Levels to Images (9148)');
+  win32.postMessage(lmHwnd, WIN.WM_COMMAND, WM.EXPORT_MULTIPLE_LEVELS_IMAGES, 0);
 
   const dlg = await win32.waitFor(() => win32.findDialogByCaption(DLG_EXPORT_IMAGES.CAPTION), {
-    timeoutMs,
+    timeoutMs: Math.min(timeoutMs, 30000),
     pollMs,
     label: DLG_EXPORT_IMAGES.CAPTION,
   });
+  console.log('lmauto: opened Dialog 1027 (Export Levels to Images)');
 
   setDlgCheckbox(dlg, DLG_EXPORT_IMAGES.ONLY_MODIFIED, onlyModified);
   setDlgCheckbox(dlg, DLG_EXPORT_IMAGES.AUTO_SET_SCREENS, autoSetScreens);
   await win32.sleep(100);
 
-  const selectBtn = win32.getDlgItem(dlg, DLG_EXPORT_IMAGES.SELECT_DIR_FILE);
-  if (!selectBtn) throw new Error('Dialog 1027: Select Directory && File Name button missing');
-  win32.clickButton(selectBtn);
+  await clickSelectDirFile(dlg);
 
   const fileDlg = await win32.waitFor(() => win32.findCommonFileDialog(), {
     timeoutMs,
     pollMs,
     label: 'common save file dialog',
   });
+  console.log(`lmauto: got save dialog title=${JSON.stringify(fileDlg.title || '')}`);
 
   const edit =
     fileDlg.edit ||
@@ -83,9 +103,9 @@ async function runExportMultipleImages(lmHwnd, opts) {
     win32.findWindowEx(fileDlg.hwnd, null, 'Edit', null);
   if (!edit) throw new Error('Save dialog: filename Edit control not found');
 
-  // Prefer directory + file prefix; normalize to backslashes for Wine.
   const winPath = savePath.replace(/\//g, '\\');
   win32.setWindowText(edit, winPath);
+  console.log(`lmauto: set save path ${JSON.stringify(winPath)}`);
   await win32.sleep(100);
 
   const okBtn =
@@ -93,13 +113,13 @@ async function runExportMultipleImages(lmHwnd, opts) {
     win32.findWindowEx(fileDlg.hwnd, null, 'Button', 'Save') ||
     win32.findWindowEx(fileDlg.hwnd, null, 'Button', '&Save');
   if (okBtn) {
+    win32.clickDialogButton(fileDlg.hwnd, WIN.IDOK, okBtn);
     win32.clickButton(okBtn);
   } else {
-    // Fallback: press default OK via WM_COMMAND IDOK on dialog
     win32.sendMessage(fileDlg.hwnd, WIN.WM_COMMAND, WIN.IDOK, 0);
   }
+  console.log('lmauto: confirmed save dialog');
 
-  // Wait for export dialog(s) to close.
   await win32.waitFor(
     () => {
       const still = win32.findDialogByCaption(DLG_EXPORT_IMAGES.CAPTION);
@@ -111,12 +131,12 @@ async function runExportMultipleImages(lmHwnd, opts) {
       label: 'export completion (dialog close)',
     }
   );
+  console.log('lmauto: export dialog closed');
 }
 
 /**
- * Build a Windows path for the export prefix inside a staging directory.
- * @param {string} stagingDir  Windows or mixed path
- * @param {string} filePrefix  e.g. "lmlevel_l1only_nogrid "
+ * @param {string} stagingDir
+ * @param {string} filePrefix
  */
 function stagingPrefixPath(stagingDir, filePrefix) {
   const base = filePrefix.replace(/\s+$/, '');
@@ -127,4 +147,5 @@ module.exports = {
   setDlgCheckbox,
   runExportMultipleImages,
   stagingPrefixPath,
+  clickSelectDirFile,
 };

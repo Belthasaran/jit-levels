@@ -9,9 +9,10 @@ driver uses Win32 `WM_COMMAND` IDs from LM_INTEROP notes.
 | Path | Role |
 |------|------|
 | `lm361.exe` / `lm363.exe` | Staged Lunar Magic binaries |
-| `node-win-x64/node.exe` | Windows Node for Win32 automation under Wine |
+| `node-win-x86/node.exe` | **PE32** Windows Node (required for menu inject) |
+| `native/lmauto_menuread.dll` | Injected into LM to read View checkmarks in-process |
 | `host/run_lmauto.sh` | Linux entry: headered temp ROM → Wine LM → Wine Node |
-| `bin/lmauto_export.js` | Guest CLI (must run as win32 Node) |
+| `bin/lmauto_export.js` | Guest CLI (must run as win32 ia32 Node) |
 | `lib/` | WM catalog, profiles, rom prepare, koffi Win32, dialogs |
 | `tests/` | Unit tests (no Wine); optional integration smoke |
 
@@ -19,8 +20,17 @@ driver uses Win32 `WM_COMMAND` IDs from LM_INTEROP notes.
 
 - `wine`, X display (`DISPLAY=:99` + Xvfb is typical)
 - Wine prefix (default `$HOME/.wine_lm_auto`)
-- `node-win-x64/node.exe` present under this directory
-- `npm install` in `lmauto/` once (installs `koffi` with win32 prebuilds)
+- **`node-win-x86/node.exe`** (Node 20 win-x86 zip; Node 24+ dropped ia32)
+- `native/lmauto_menuread.dll` (built by `native/build_menuread.sh` via `i686-w64-mingw32-gcc`, or auto-built by the host script)
+- `npm install` in `lmauto/` once (installs `koffi` with win32_ia32 prebuilds)
+
+### Why PE32 Node + DLL inject?
+
+`GetMenu` / `GetMenuState` from a **separate** process always fail under Wine
+(`IsMenu=0`, `GetMenuItemCount=-1`): HMENU is process-local. lmauto injects
+`lmauto_menuread.dll` into LM and reads real checkmarks there. That requires
+**ia32** guest Node so `CreateRemoteThread` matches PE32 LM. There is **no**
+assumed-defaults fallback and **no** multi-second menu poll.
 
 ## Usage
 
@@ -51,6 +61,8 @@ Always: Animation **off** + **Reset**, Zoom **100%**, Level Entrances and other
 overlays **off**. Dialog 1027 defaults: **Only modified levels** ON (use
 `--all-levels` to export all 0x200), Auto-Set Screens OFF.
 
+Dialog 1027 “Select Directory” uses parent `WM_COMMAND` (not only `BM_CLICK`).
+
 LM appends the level hex id after the prefix (space preserved), matching
 `lmlevelinfo/test/` fixture names.
 
@@ -60,7 +72,7 @@ LM appends the level hex id after the prefix (space preserved), matching
 |----------|---------|
 | `LMAUTO_LM` | `lmauto/lm363.exe` |
 | `LMAUTO_WINEPREFIX` | `$HOME/.wine_lm_auto` |
-| `LMAUTO_NODE` | `lmauto/node-win-x64/node.exe` |
+| `LMAUTO_NODE` | `lmauto/node-win-x86/node.exe` |
 | `WINE` | `wine` |
 | `DISPLAY` | `:99` |
 | `LMAUTO_KEEP_WORKDIR` | unset (delete temp workdir) |

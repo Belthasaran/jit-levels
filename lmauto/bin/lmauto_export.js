@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Guest CLI: run under Windows Node (Wine node-win-x64/node.exe).
+ * Guest CLI: run under Windows Node ia32 (Wine node-win-x86/node.exe).
  * Attaches to LMFrame, applies a View profile, completes Export Multiple Levels to Images.
  *
  * Usage:

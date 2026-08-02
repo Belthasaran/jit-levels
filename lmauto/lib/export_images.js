@@ -53,7 +53,6 @@ async function exportImagesWithProfile(opts) {
     exportTimeoutMs: opts.timeoutMs,
   });
 
-  console.log('lmauto: export dialog sequence completed');
   return { profile, savePath, stagingDir };
 }
 

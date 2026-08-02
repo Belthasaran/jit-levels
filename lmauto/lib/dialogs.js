@@ -120,18 +120,45 @@ async function runExportMultipleImages(lmHwnd, opts) {
   }
   console.log('lmauto: confirmed save dialog');
 
-  await win32.waitFor(
-    () => {
-      const still = win32.findDialogByCaption(DLG_EXPORT_IMAGES.CAPTION);
-      return !still;
-    },
+  // LM shows a completion message box; dismiss it, then close leftover dialogs.
+  const doneCaption = 'Multiple Level Image Exporting Complete!';
+  const doneDlg = await win32.waitFor(
+    () =>
+      win32.findDialogByCaption(doneCaption) ||
+      win32.findTopLevelWindow({ titleIncludes: 'Exporting Complete' }),
     {
       timeoutMs: opts.exportTimeoutMs ?? opts.timeoutMs ?? 600000,
-      pollMs: 500,
-      label: 'export completion (dialog close)',
+      pollMs: 400,
+      label: 'export completion message',
     }
   );
-  console.log('lmauto: export dialog closed');
+  console.log('lmauto: export complete message visible; dismissing');
+  const ok =
+    win32.getDlgItem(doneDlg, WIN.IDOK) ||
+    win32.findWindowEx(doneDlg, null, 'Button', 'OK') ||
+    win32.findWindowEx(doneDlg, null, 'Button', '&OK');
+  if (ok) {
+    win32.clickDialogButton(doneDlg, WIN.IDOK, ok);
+    win32.clickButton(ok);
+  } else {
+    win32.postMessage(doneDlg, WIN.WM_COMMAND, WIN.IDOK, 0);
+  }
+  await win32.sleep(200);
+
+  // Close Dialog 1027 / stray Save As if still open.
+  for (let i = 0; i < 10; i++) {
+    const exportDlg = win32.findDialogByCaption(DLG_EXPORT_IMAGES.CAPTION);
+    if (exportDlg) {
+      win32.postMessage(exportDlg, WIN.WM_CLOSE, 0, 0);
+    }
+    const saveAs = win32.findTopLevelWindow({ titleEquals: 'Save As' });
+    if (saveAs) {
+      win32.postMessage(saveAs, WIN.WM_CLOSE, 0, 0);
+    }
+    if (!exportDlg && !saveAs && !win32.findDialogByCaption(doneCaption)) break;
+    await win32.sleep(150);
+  }
+  console.log('lmauto: export dialog sequence finished');
 }
 
 /**
